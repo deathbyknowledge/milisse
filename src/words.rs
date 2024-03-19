@@ -1,77 +1,17 @@
-//#![no_std]
-const WORD_SIZE: usize = 16; // Word size in bits.
+use crate::primitives::*;
+
 const SUBADDRESS_MODE_CODE_0: u8 = 0b00000; // Subaddress for mode code
 const SUBADDRESS_MODE_CODE_1: u8 = 0b11111; // Subaddress for mode code
 const BROADCAST_ADDR: u8 = 0b11111; // Address for Brodcast mode.
 
-// Trait used for encoding words as u16 (omitting sync waves and parity bits).
-pub trait Encode {
-  fn encode(&self) -> u16; 
-}
-
-/*
-// Primitive Types for bit sized fields.
-*/
-
-#[derive(Debug,Copy,Clone)]
-struct BitField<const SIZE: usize> {
-    value: u8,
-}
-
-impl<const SIZE: usize> BitField<SIZE> {
-    pub fn new(value: u8) -> Self {
-        if SIZE > 8 {
-            panic!("SIZE is too large for u8.");
-        }
-        assert!(value < (1 << SIZE), "Value exceeds the bitfield size");
-        Self { value }
-    }
-}
-
-// FIELD_SIZE in bits. LSB_IDX the position of the LSB of the BitField, which
-// translates to the amount of bits to shift left.
-pub trait AlignableBitField<const FIELD_SIZE: usize, const LSB_IDX: u8>: Into<BitField<FIELD_SIZE>> where Self: Clone {
-  fn align_to_word(&self) -> u16 {
-    let bit_field: BitField<FIELD_SIZE> = (self.clone()).into();
-    (bit_field.value as u16) << LSB_IDX
-  }
-}
-
-// For types that want to encapsulate contingent fields
-// resulting in more than 8 bits when added.
-#[derive(Debug,Copy,Clone)]
-struct ComplexBitField<const SIZE: usize> {
-    value: u16,
-}
-
-impl<const SIZE: usize> ComplexBitField<SIZE> {
-    pub fn new(value: u16) -> Self {
-        if SIZE > 16 {
-            panic!("SIZE is too large for u16.");
-        }
-        assert!(value < (1 << SIZE), "Value exceeds the bitfield size");
-        Self { value }
-    }
-}
-
-// FIELD_SIZE in bits. LSB_IDX the position of the LSB of the BitField, which
-// translates to the amount of bits to shift left.
-pub trait AlignableComplexBitField<const FIELD_SIZE: usize, const LSB_IDX: u8>: Into<ComplexBitField<FIELD_SIZE>> where Self: Clone {
-  fn align_to_word(&self) -> u16 {
-    let bit_field: ComplexBitField<FIELD_SIZE> = (self.clone()).into();
-    bit_field.value << LSB_IDX
-  }
-}
-
-
-#[derive(Debug,Copy,Clone)]
+#[derive(Debug, Copy, Clone)]
 pub enum WordFormat {
     CommandWord,
     DataWord,
     StatusWord,
 }
 
-#[derive(Debug,Copy,Clone)]
+#[derive(Debug, Copy, Clone)]
 pub enum RTAddr {
     Single(u8),
     Broadcast,
@@ -89,7 +29,7 @@ impl From<RTAddr> for BitField<5> {
 
 impl AlignableBitField<5, 11> for RTAddr {}
 
-#[derive(Debug,Copy,Clone)]
+#[derive(Debug, Copy, Clone)]
 pub enum RTAction {
     Transmit,
     Receive,
@@ -112,28 +52,27 @@ impl From<RTAction> for BitField<1> {
 
 impl AlignableBitField<1, 10> for RTAction {}
 
-
 /*
 // Command Words.
 */
 
-#[derive(Debug,Clone)]
-struct CommandWord {
+#[derive(Debug, Clone)]
+pub struct CommandWord {
     rt_addr: RTAddr,       // Remote Terminal address 5 bit field.
     tr: RTAction,          // Transmit/Receive bit .
     data: CommandWordData, // Subaddress Mode 5 bit field.
 }
 
 impl Encode for CommandWord {
-  fn encode(&self) -> u16 {
-    let addr = self.rt_addr.align_to_word();
-    let tr = self.tr.align_to_word();
-    addr + tr + self.data.align_to_word()
-  }
+    fn encode(&self) -> u16 {
+        let addr = self.rt_addr.align_to_word();
+        let tr = self.tr.align_to_word();
+        addr + tr + self.data.align_to_word()
+    }
 }
 
-#[derive(Debug,Clone)]
-enum CommandWordData {
+#[derive(Debug, Clone)]
+pub enum CommandWordData {
     DataTransfer {
         subaddress: BitField<5>,
         word_count: BitField<5>,
@@ -144,20 +83,22 @@ enum CommandWordData {
 impl From<CommandWordData> for ComplexBitField<10> {
     fn from(data: CommandWordData) -> Self {
         match data {
-          CommandWordData::DataTransfer{subaddress, word_count} => {
-            let subaddr = (BitField::<5>::from(subaddress).value as u16) << 5;
-            let wc = BitField::<5>::from(word_count).value as u16;
-            ComplexBitField::new(subaddr + wc)
-          },
-          CommandWordData::ModeCode(mode_code) => {
-            let subaddr = (SUBADDRESS_MODE_CODE_1 as u16) << 5;
-            let code = u8::from(mode_code) as u16;
-            ComplexBitField::new(subaddr + code)
-          }
+            CommandWordData::DataTransfer {
+                subaddress,
+                word_count,
+            } => {
+                let subaddr = (BitField::<5>::from(subaddress).value as u16) << 5;
+                let wc = BitField::<5>::from(word_count).value as u16;
+                ComplexBitField::new(subaddr + wc)
+            }
+            CommandWordData::ModeCode(mode_code) => {
+                let subaddr = (SUBADDRESS_MODE_CODE_1 as u16) << 5;
+                let code = u8::from(mode_code) as u16;
+                ComplexBitField::new(subaddr + code)
+            }
         }
     }
 }
-
 
 impl AlignableComplexBitField<10, 0> for CommandWordData {}
 
@@ -170,13 +111,21 @@ impl CommandWord {
         }
     }
 
-    pub fn new_data_transfer(rt_addr: RTAddr, tr: RTAction, subaddress: u8, word_count: u8) -> Self {
+    pub fn new_data_transfer(
+        rt_addr: RTAddr,
+        tr: RTAction,
+        subaddress: u8,
+        word_count: u8,
+    ) -> Self {
         let subaddress = BitField::new(subaddress);
         let word_count = BitField::new(word_count);
         Self {
             rt_addr,
             tr,
-            data: CommandWordData::DataTransfer{subaddress, word_count},
+            data: CommandWordData::DataTransfer {
+                subaddress,
+                word_count,
+            },
         }
     }
 }
@@ -185,7 +134,7 @@ impl CommandWord {
 // Data Words.
 */
 
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 struct DataWord {
     data: u16, // Data 16 bit field.
 }
@@ -194,8 +143,8 @@ struct DataWord {
 // Status Words.
 */
 
-#[derive(Debug,Clone)]
-struct StatusWord {
+#[derive(Debug, Clone)]
+pub struct StatusWord {
     rt_addr: RTAddr,       // Remote Terminal address 5 bit field.
     mesg_err: BitField<1>, // Message Error bit.
     inst: BitField<1>,     // Instrumentation bit.
@@ -209,7 +158,7 @@ struct StatusWord {
 
 // TODO: Some of these codes REQUIRE the T/R bit to be set to 1 regardless of the direction of data flow.
 // TODO: Implement From u8
-#[derive(Debug,Clone)]
+#[derive(Debug, Clone)]
 pub enum ModeCode {
     DynamicBusControl,
     Synchronize,
@@ -254,24 +203,4 @@ impl From<ModeCode> for BitField<5> {
     fn from(code: ModeCode) -> Self {
         BitField::new(u8::from(code))
     }
-}
-
-fn main() {
-    println!("");
-    let cmd = CommandWord::new_mode_command(
-        RTAddr::Single(23),
-        RTAction::Transmit,
-        ModeCode::TransmitLastCommand,
-    );
-    println!("{:?}", cmd);
-    println!("{:b}", cmd.encode());
-    let dt = CommandWord::new_data_transfer(
-        RTAddr::Single(27),
-        RTAction::Transmit,
-        1,
-        2,
-    );
-    println!("{:?}", dt);
-    println!("{:b}", dt.encode());
-    //assert!(
 }
