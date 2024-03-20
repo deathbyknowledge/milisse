@@ -1,11 +1,6 @@
 const WORD_SIZE: u8 = 16;
 pub type Word = u16;
 
-// Trait used for encoding words as u16 (omitting sync waves and parity bits).
-pub trait Encode {
-    fn encode(&self) -> Word;
-}
-
 /*
 // Primitive Types for bit sized fields.
 */

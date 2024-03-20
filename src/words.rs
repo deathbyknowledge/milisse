@@ -125,15 +125,8 @@ impl AlignableComplexBitField<10, 0> for CommandWordData {}
 #[derive(Debug, Clone)]
 pub struct CommandWord {
     raw_value: Word,
-    // rt_addr: RTAddr,       // Remote Terminal address 5 bit field.
-    // tr: RTAction,          // Transmit/Receive bit .
-    // data: CommandWordData, // Subaddress Mode 5 bit field.
-}
-
-impl Encode for CommandWord {
-    fn encode(&self) -> Word {
-        self.raw_value
-    }
+    // Remote Terminal address 5 bit field.
+    // Transmit/Receive bit .
 }
 
 impl CommandWord {
@@ -142,6 +135,15 @@ impl CommandWord {
         raw_value += tr.align_to_word();
         raw_value += CommandWordData::ModeCode(code).align_to_word();
         Self { raw_value }
+    }
+
+    pub fn from_u16(value: Word) -> Self {
+        Self { raw_value: value }
+    }
+
+    // Return the Word as a u16 (omitting sync waves and parity bit).
+    pub fn value(&self) -> Word {
+        self.raw_value
     }
 
     pub fn new_data_transfer(
@@ -180,9 +182,14 @@ impl CommandWord {
         return CommandWordData::read(self.raw_value);
     }
 
+    /// Sets the Subaddress field to the Mode Code value
+    /// and Word Data Count field to the provided code. It also
+    /// sets the T/R bit for those codes that required a fixed 1.
     pub fn set_command_mode(&mut self, code: ModeCode) {
-        let data = CommandWordData::ModeCode(code);
-        self.raw_value = data.set_in(self.raw_value)
+        // Depending on the mode code, the T/R bit must be
+        // set to a fixed 1.
+        self.raw_value = code.tr_bit().set_in(self.raw_value);
+        self.raw_value = CommandWordData::ModeCode(code).set_in(self.raw_value);
     }
 
     pub fn set_data_transfer(&mut self, subaddress: BitField<5>, word_count: BitField<5>) {
@@ -191,6 +198,12 @@ impl CommandWord {
             word_count,
         };
         self.raw_value = data.set_in(self.raw_value)
+    }
+}
+
+impl From<u16> for CommandWord {
+    fn from(value: u16) -> Self {
+        CommandWord::from_u16(value)
     }
 }
 
@@ -220,9 +233,8 @@ pub struct StatusWord {
     term: BitField<1>,     // Terminal Flag bit.
 }
 
-// TODO: Some of these codes REQUIRE the T/R bit to be set to 1 regardless of the direction of data flow.
 // TODO: Implement From u8
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum ModeCode {
     DynamicBusControl,
     Synchronize,
@@ -240,6 +252,20 @@ pub enum ModeCode {
     SelectedTransmitter,
     OverrideSelectedTransmitter,
     Invalid, // out of bounds OR a Reserved value
+}
+
+impl ModeCode {
+    fn tr_bit(&self) -> RTAction {
+        // Each mode code requires a different T/R bit setting,
+        // this is a quick mapping to get the desired value.
+        match Into::<u8>::into(*self) {
+            0..=0b10000 => RTAction::Transmit,
+            0b10001 => RTAction::Receive,
+            0b10010..=0b10011 => RTAction::Transmit,
+            0b10100..=0b10101 => RTAction::Receive,
+            0b10110..=u8::MAX => unimplemented!(), // RESERVED values.
+        }
+    }
 }
 
 impl From<ModeCode> for u8 {
@@ -297,7 +323,6 @@ impl From<ModeCode> for BitField<5> {
 #[cfg(test)]
 mod tests {
 
-    use crate::primitives::*;
     use crate::words::*;
     #[test]
     fn command_mode_word() {
@@ -306,7 +331,7 @@ mod tests {
             RTAction::Transmit,
             ModeCode::TransmitLastCommand,
         );
-        assert_eq!(cmd.encode(), 0b1011111111110010);
+        assert_eq!(cmd.value(), 0b1011111111110010);
         assert_eq!(cmd.get_rt_addr(), RTAddr::Single(23.into()));
         assert_eq!(cmd.get_tr_bit(), RTAction::Transmit);
         assert_eq!(
@@ -350,7 +375,7 @@ mod tests {
             1.into(),
             2.into(),
         );
-        assert_eq!(dt.encode(), 0b1101100000100010);
+        assert_eq!(dt.value(), 0b1101100000100010);
         assert_eq!(dt.get_rt_addr(), RTAddr::Single(27.into()));
         assert_eq!(dt.get_tr_bit(), RTAction::Receive);
         assert_eq!(
@@ -360,5 +385,9 @@ mod tests {
                 word_count: 2.into()
             }
         );
+    }
+    #[test]
+    fn command_code_proper_tr_bit() {
+        todo!();
     }
 }
