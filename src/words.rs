@@ -11,7 +11,7 @@ pub enum WordFormat {
     StatusWord,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum RTAddr {
     Single(u8),
     Broadcast,
@@ -21,15 +21,25 @@ pub enum RTAddr {
 impl From<RTAddr> for BitField<5> {
     fn from(addr: RTAddr) -> Self {
         match addr {
-            RTAddr::Single(val) => BitField::<5>::new(val),
-            RTAddr::Broadcast => BitField::<5>::new(BROADCAST_ADDR),
+            RTAddr::Single(val) => Self::new(val),
+            RTAddr::Broadcast => Self::new(BROADCAST_ADDR),
+        }
+    }
+}
+
+impl From<BitField<5>> for RTAddr {
+    fn from(bitfield: BitField<5>) -> Self {
+        if bitfield.value == BROADCAST_ADDR {
+            RTAddr::Broadcast
+        } else {
+            RTAddr::Single(bitfield.value)
         }
     }
 }
 
 impl AlignableBitField<5, 11> for RTAddr {}
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum RTAction {
     Transmit,
     Receive,
@@ -50,13 +60,24 @@ impl From<RTAction> for BitField<1> {
     }
 }
 
+impl From<BitField<1>> for RTAction {
+    fn from(bitfield: BitField<1>) -> Self {
+        if bitfield.value == 0b1 {
+            RTAction::Transmit
+        } else {
+            RTAction::Receive
+        }
+    }
+}
+
+
 impl AlignableBitField<1, 10> for RTAction {}
 
 /*
 // Command Words.
 */
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CommandWordData {
     DataTransfer {
         subaddress: BitField<5>,
@@ -84,6 +105,22 @@ impl From<CommandWordData> for ComplexBitField<10> {
         }
     }
 }
+
+impl From<ComplexBitField<10>> for CommandWordData {
+    fn from(bitfield: ComplexBitField<10>) -> Self {
+        let subaddr = (bitfield.value >> 5) as u8; 
+        let wdc = (bitfield.value & 0b11111) as u8;
+        if subaddr == SUBADDRESS_MODE_CODE_0 || subaddr == SUBADDRESS_MODE_CODE_1 {
+            CommandWordData::ModeCode(ModeCode::from(wdc))
+        } else {
+            CommandWordData::DataTransfer { 
+                subaddress: BitField::new(subaddr),
+                word_count: BitField::new(wdc)
+            }
+        }
+    }
+}
+
 
 impl AlignableComplexBitField<10, 0> for CommandWordData {}
 
@@ -124,6 +161,17 @@ impl CommandWord {
         .align_to_word();
         Self { raw_value }
     }
+
+    pub fn get_rt_addr(&self) -> RTAddr {
+        return RTAddr::read(self.raw_value)
+    }
+
+    pub fn get_tr_bit(&self) -> RTAction {
+        return RTAction::read(self.raw_value)
+    }
+    pub fn get_command_data(&self) -> CommandWordData {
+        return CommandWordData::read(self.raw_value)
+    }
 }
 
 /*
@@ -154,7 +202,7 @@ pub struct StatusWord {
 
 // TODO: Some of these codes REQUIRE the T/R bit to be set to 1 regardless of the direction of data flow.
 // TODO: Implement From u8
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ModeCode {
     DynamicBusControl,
     Synchronize,
@@ -171,6 +219,7 @@ pub enum ModeCode {
     TransmitBITWord,
     SelectedTransmitter,
     OverrideSelectedTransmitter,
+    Invalid // out of bounds OR a Reserved value
 }
 
 impl From<ModeCode> for u8 {
@@ -191,12 +240,65 @@ impl From<ModeCode> for u8 {
             ModeCode::TransmitBITWord => 0b10011,
             ModeCode::SelectedTransmitter => 0b10100,
             ModeCode::OverrideSelectedTransmitter => 0b10101,
+            ModeCode::Invalid => 0b11111, // one of many possible values
+        }
+    }
+}
+
+impl From<u8> for ModeCode {
+    fn from(value: u8) -> Self {
+        match value {
+            0b00000 => ModeCode::DynamicBusControl,
+            0b00001 => ModeCode::Synchronize,
+            0b00010 => ModeCode::TransmitStatusWord,
+            0b00011 => ModeCode::InitiateSelfTest,
+            0b00100 => ModeCode::TransmitterShutdown,
+            0b00101 => ModeCode::OverrideTransmitter,
+            0b00110 => ModeCode::InhibitTerminalFlagBit,
+            0b00111 => ModeCode::OverrideInhibitTerminalFlagBit,
+            0b01000 => ModeCode::ResetRT,
+            0b10000 => ModeCode::TransmitVectorWord,
+            0b10001 => ModeCode::SyncronizeWithDataWord,
+            0b10010 => ModeCode::TransmitLastCommand,
+            0b10011 => ModeCode::TransmitBITWord,
+            0b10100 => ModeCode::SelectedTransmitter,
+            0b10101 => ModeCode::OverrideSelectedTransmitter,
+            9_u8..=15_u8 | 22_u8..=u8::MAX => ModeCode::Invalid,   
         }
     }
 }
 
 impl From<ModeCode> for BitField<5> {
     fn from(code: ModeCode) -> Self {
-        BitField::new(u8::from(code))
+        BitField::new(code.into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use crate::primitives::*;
+    use crate::words::*;
+    #[test]
+    fn command_mode_word() {
+
+        let cmd = CommandWord::new_mode_command(
+            RTAddr::Single(23),
+            RTAction::Transmit,
+            ModeCode::TransmitLastCommand,
+        );
+        assert_eq!(cmd.encode(), 0b1011111111110010);
+        assert_eq!(cmd.get_rt_addr(), RTAddr::Single(23));
+        assert_eq!(cmd.get_tr_bit(), RTAction::Transmit);
+        assert_eq!(cmd.get_command_data(), CommandWordData::ModeCode(ModeCode::TransmitLastCommand));
+    }
+
+    #[test]
+    fn command_data_transfer_word() {
+        let dt = CommandWord::new_data_transfer(RTAddr::Single(27), RTAction::Receive, 1, 2);
+        assert_eq!(dt.encode(), 0b1101100000100010);
+        assert_eq!(dt.get_rt_addr(), RTAddr::Single(27));
+        assert_eq!(dt.get_tr_bit(), RTAction::Receive);
+        assert_eq!(dt.get_command_data(), CommandWordData::DataTransfer{subaddress: BitField::new(1), word_count: BitField::new(2)});
     }
 }

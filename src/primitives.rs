@@ -10,7 +10,7 @@ pub trait Encode {
 // Primitive Types for bit sized fields.
 */
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct BitField<const SIZE: u8> {
     pub value: u8,
 }
@@ -28,7 +28,7 @@ impl<const SIZE: u8> BitField<SIZE> {
 // FIELD_SIZE in bits. LSB_IDX the position of the LSB of the BitField, which
 // translates to the amount of bits to shift left.
 pub trait AlignableBitField<const FIELD_SIZE: u8, const LSB_IDX: u8>:
-    Into<BitField<FIELD_SIZE>>
+    Into<BitField<FIELD_SIZE>> + From<BitField<FIELD_SIZE>>
 where
     Self: Clone,
 {
@@ -40,10 +40,17 @@ where
 
     // Set position of self in the value word, without changing any other bits.
     fn set(&self, value: Word) -> Word {
-        let shft_left_amount = WORD_SIZE - FIELD_SIZE + LSB_IDX;
-        let mask = 0xFF >> LSB_IDX << LSB_IDX << shft_left_amount >> shft_left_amount;
+        let shift_left = WORD_SIZE - FIELD_SIZE + LSB_IDX;
+        let mask = 0xFFFF >> LSB_IDX << LSB_IDX << shift_left >> shift_left;
         let result = value & !mask;
         result | self.align_to_word()
+    }
+
+    fn read(value: Word) -> Self {
+        let shift_left = WORD_SIZE - (FIELD_SIZE + LSB_IDX);
+        let result = value << shift_left >> shift_left >> (LSB_IDX);
+        let bitfield = BitField::new(result as u8);
+        bitfield.into()
     }
 }
 
@@ -67,7 +74,7 @@ impl<const SIZE: u8> ComplexBitField<SIZE> {
 // FIELD_SIZE in bits. LSB_IDX the position of the LSB of the BitField, which
 // translates to the amount of bits to shift left.
 pub trait AlignableComplexBitField<const FIELD_SIZE: u8, const LSB_IDX: u8>:
-    Into<ComplexBitField<FIELD_SIZE>>
+    Into<ComplexBitField<FIELD_SIZE>> + From<ComplexBitField<FIELD_SIZE>> 
 where
     Self: Clone,
 {
@@ -79,8 +86,16 @@ where
     // Set position of self in the value word, without changing any other bits.
     fn set(&self, value: Word) -> Word {
         let shft_left_amount = WORD_SIZE - FIELD_SIZE + LSB_IDX;
-        let mask = 0xFF >> LSB_IDX << LSB_IDX << shft_left_amount >> shft_left_amount;
+        let mask = 0xFFFF >> LSB_IDX << LSB_IDX << shft_left_amount >> shft_left_amount;
         let result = value & !mask;
         result | self.align_to_word()
     }
+
+    fn read(value: Word) -> Self {
+        let shift_left = WORD_SIZE - (FIELD_SIZE + LSB_IDX);
+        let result = value << shift_left >> shift_left >> (LSB_IDX);
+        let bitfield = ComplexBitField::new(result);
+        bitfield.into()
+    }
+
 }
