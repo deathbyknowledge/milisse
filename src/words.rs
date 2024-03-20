@@ -57,21 +57,6 @@ impl AlignableBitField<1, 10> for RTAction {}
 */
 
 #[derive(Debug, Clone)]
-pub struct CommandWord {
-    rt_addr: RTAddr,       // Remote Terminal address 5 bit field.
-    tr: RTAction,          // Transmit/Receive bit .
-    data: CommandWordData, // Subaddress Mode 5 bit field.
-}
-
-impl Encode for CommandWord {
-    fn encode(&self) -> u16 {
-        let addr = self.rt_addr.align_to_word();
-        let tr = self.tr.align_to_word();
-        addr + tr + self.data.align_to_word()
-    }
-}
-
-#[derive(Debug, Clone)]
 pub enum CommandWordData {
     DataTransfer {
         subaddress: BitField<5>,
@@ -102,13 +87,26 @@ impl From<CommandWordData> for ComplexBitField<10> {
 
 impl AlignableComplexBitField<10, 0> for CommandWordData {}
 
+#[derive(Debug, Clone)]
+pub struct CommandWord {
+    raw_value: Word,
+    // rt_addr: RTAddr,       // Remote Terminal address 5 bit field.
+    // tr: RTAction,          // Transmit/Receive bit .
+    // data: CommandWordData, // Subaddress Mode 5 bit field.
+}
+
+impl Encode for CommandWord {
+    fn encode(&self) -> Word {
+        self.raw_value
+    }
+}
+
 impl CommandWord {
     pub fn new_mode_command(rt_addr: RTAddr, tr: RTAction, code: ModeCode) -> Self {
-        Self {
-            rt_addr,
-            tr,
-            data: CommandWordData::ModeCode(code),
-        }
+        let mut raw_value = rt_addr.align_to_word();
+        raw_value += tr.align_to_word();
+        raw_value += CommandWordData::ModeCode(code).align_to_word();
+        Self { raw_value }
     }
 
     pub fn new_data_transfer(
@@ -117,16 +115,14 @@ impl CommandWord {
         subaddress: u8,
         word_count: u8,
     ) -> Self {
-        let subaddress = BitField::new(subaddress);
-        let word_count = BitField::new(word_count);
-        Self {
-            rt_addr,
-            tr,
-            data: CommandWordData::DataTransfer {
-                subaddress,
-                word_count,
-            },
+        let mut raw_value = rt_addr.align_to_word();
+        raw_value += tr.align_to_word();
+        raw_value += CommandWordData::DataTransfer {
+            subaddress: BitField::new(subaddress),
+            word_count: BitField::new(word_count),
         }
+        .align_to_word();
+        Self { raw_value }
     }
 }
 
