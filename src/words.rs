@@ -122,119 +122,8 @@ impl From<ComplexBitField<10>> for CommandWordData {
 
 impl AlignableComplexBitField<10, 0> for CommandWordData {}
 
-#[derive(Debug, Clone)]
-pub struct CommandWord {
-    raw_value: Word,
-    // Remote Terminal address 5 bit field.
-    // Transmit/Receive bit .
-}
-
-impl CommandWord {
-    pub fn new_mode_command(rt_addr: RTAddr, tr: RTAction, code: ModeCode) -> Self {
-        let mut raw_value = rt_addr.align_to_word();
-        raw_value += tr.align_to_word();
-        raw_value += CommandWordData::ModeCode(code).align_to_word();
-        Self { raw_value }
-    }
-
-    pub fn from_u16(value: Word) -> Self {
-        Self { raw_value: value }
-    }
-
-    // Return the Word as a u16 (omitting sync waves and parity bit).
-    pub fn value(&self) -> Word {
-        self.raw_value
-    }
-
-    pub fn new_data_transfer(
-        rt_addr: RTAddr,
-        tr: RTAction,
-        subaddress: BitField<5>,
-        word_count: BitField<5>,
-    ) -> Self {
-        let mut raw_value = rt_addr.align_to_word();
-        raw_value += tr.align_to_word();
-        raw_value += CommandWordData::DataTransfer {
-            subaddress,
-            word_count,
-        }
-        .align_to_word();
-        Self { raw_value }
-    }
-
-    pub fn get_rt_addr(&self) -> RTAddr {
-        return RTAddr::read(self.raw_value);
-    }
-
-    pub fn set_rt_addr(&mut self, addr: RTAddr) {
-        self.raw_value = addr.set_in(self.raw_value)
-    }
-
-    pub fn get_tr_bit(&self) -> RTAction {
-        return RTAction::read(self.raw_value);
-    }
-
-    pub fn set_tr_bit(&mut self, addr: RTAction) {
-        self.raw_value = addr.set_in(self.raw_value)
-    }
-
-    pub fn get_command_data(&self) -> CommandWordData {
-        return CommandWordData::read(self.raw_value);
-    }
-
-    /// Sets the Subaddress field to the Mode Code value
-    /// and Word Data Count field to the provided code. It also
-    /// sets the T/R bit for those codes that required a fixed 1.
-    pub fn set_command_mode(&mut self, code: ModeCode) {
-        // Depending on the mode code, the T/R bit must be
-        // set to a fixed 1.
-        self.raw_value = code.tr_bit().set_in(self.raw_value);
-        self.raw_value = CommandWordData::ModeCode(code).set_in(self.raw_value);
-    }
-
-    pub fn set_data_transfer(&mut self, subaddress: BitField<5>, word_count: BitField<5>) {
-        let data = CommandWordData::DataTransfer {
-            subaddress,
-            word_count,
-        };
-        self.raw_value = data.set_in(self.raw_value)
-    }
-}
-
-impl From<u16> for CommandWord {
-    fn from(value: u16) -> Self {
-        CommandWord::from_u16(value)
-    }
-}
-
-/*
-// Data Words.
-*/
-
-#[derive(Debug, Clone)]
-struct DataWord {
-    data: u16, // Data 16 bit field.
-}
-
-/*
-// Status Words.
-*/
-
-#[derive(Debug, Clone)]
-pub struct StatusWord {
-    rt_addr: RTAddr,       // Remote Terminal address 5 bit field.
-    mesg_err: BitField<1>, // Message Error bit.
-    inst: BitField<1>,     // Instrumentation bit.
-    svc_req: BitField<1>,  // Service request bit.
-    bc_comm: BitField<1>,  // Broadcast Command bit.
-    busy: BitField<1>,     // Busy bit.
-    subsys: BitField<1>,   // Subsystem Flag bit.
-    dbc: BitField<1>,      // Dynamic Bus Control bit.
-    term: BitField<1>,     // Terminal Flag bit.
-}
-
-// TODO: Implement From u8
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+// TODO: Some values dont' allow address to be Broadcast
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum ModeCode {
     DynamicBusControl,
     Synchronize,
@@ -246,7 +135,7 @@ pub enum ModeCode {
     OverrideInhibitTerminalFlagBit,
     ResetRT,
     TransmitVectorWord,
-    SyncronizeWithDataWord,
+    SynchronizeWithDataWord,
     TransmitLastCommand,
     TransmitBITWord,
     SelectedTransmitter,
@@ -281,7 +170,7 @@ impl From<ModeCode> for u8 {
             ModeCode::OverrideInhibitTerminalFlagBit => 0b00111,
             ModeCode::ResetRT => 0b01000,
             ModeCode::TransmitVectorWord => 0b10000,
-            ModeCode::SyncronizeWithDataWord => 0b10001,
+            ModeCode::SynchronizeWithDataWord => 0b10001,
             ModeCode::TransmitLastCommand => 0b10010,
             ModeCode::TransmitBITWord => 0b10011,
             ModeCode::SelectedTransmitter => 0b10100,
@@ -304,7 +193,7 @@ impl From<u8> for ModeCode {
             0b00111 => ModeCode::OverrideInhibitTerminalFlagBit,
             0b01000 => ModeCode::ResetRT,
             0b10000 => ModeCode::TransmitVectorWord,
-            0b10001 => ModeCode::SyncronizeWithDataWord,
+            0b10001 => ModeCode::SynchronizeWithDataWord,
             0b10010 => ModeCode::TransmitLastCommand,
             0b10011 => ModeCode::TransmitBITWord,
             0b10100 => ModeCode::SelectedTransmitter,
@@ -320,6 +209,132 @@ impl From<ModeCode> for BitField<5> {
     }
 }
 
+/** Command Word structure (16 bits)
+ *  Bits [15:11]: Remote Terminal (RT) Address.
+ *  Bits [11:10]: Transmit/Receive bit.
+ *  Bits [9:5]: Subaddress Mode.
+ *  Bits [4:0]: Data Word Count / Mode Code.
+**/
+#[derive(Debug, Clone, Copy)]
+pub struct CommandWord {
+    raw_value: Word,
+}
+
+impl CommandWord {
+    /// Initialize a new CommandWord as Mode Command. T/R bit is set 
+    /// by the ModeCode selected.
+    pub fn new_mode_command(rt_addr: RTAddr, code: ModeCode) -> Self {
+        let mut raw_value = rt_addr.align_to_word();
+        raw_value += code.tr_bit().align_to_word();
+        raw_value += CommandWordData::ModeCode(code).align_to_word();
+        Self { raw_value }
+    }
+
+    /// Initialize a CommandWord from a u16.
+    pub fn from_u16(value: Word) -> Self {
+        Self { raw_value: value }
+    }
+
+    /// Return the CommandWord as a u16 (without sync waves and parity bit).
+    pub fn value(&self) -> Word {
+        self.raw_value
+    }
+
+    /// Initialize a new CommandWord in Data Transfer mode.
+    pub fn new_data_transfer(
+        rt_addr: RTAddr,
+        tr: RTAction,
+        subaddress: BitField<5>,
+        word_count: BitField<5>,
+    ) -> Self {
+        let mut raw_value = rt_addr.align_to_word();
+        raw_value += tr.align_to_word();
+        raw_value += CommandWordData::DataTransfer {
+            subaddress,
+            word_count,
+        }
+        .align_to_word();
+        Self { raw_value }
+    }
+
+    pub fn get_rt_addr(&self) -> RTAddr {
+        return RTAddr::read(self.raw_value);
+    }
+
+    pub fn set_rt_addr(&mut self, addr: RTAddr) {
+        self.raw_value = addr.set_in(self.raw_value)
+    }
+
+    pub fn get_tr_bit(&self) -> RTAction {
+        return RTAction::read(self.raw_value);
+    }
+
+    /// Set the T/R bit. If the CommandWord is a Mode Code Command,
+    /// the provided T/R bit is ignored since the value is based on
+    /// the Code value.
+    pub fn set_tr_bit(&mut self, addr: RTAction) {
+        if let CommandWordData::DataTransfer{..} = self.get_command_data() {
+            self.raw_value = addr.set_in(self.raw_value);
+        }
+    }
+
+    pub fn get_command_data(&self) -> CommandWordData {
+        return CommandWordData::read(self.raw_value);
+    }
+
+    /// Sets the Subaddress field to the Mode Code value
+    /// and Word Data Count field to the provided code. It also
+    /// sets the T/R bit for those codes that required a fixed 1.
+    pub fn set_command_mode(&mut self, code: ModeCode) {
+        // Depending on the mode code, the T/R bit must be
+        // set to a fixed 1.
+        self.raw_value = code.tr_bit().set_in(self.raw_value);
+        self.raw_value = CommandWordData::ModeCode(code).set_in(self.raw_value);
+    }
+
+    pub fn set_data_transfer(&mut self, subaddress: BitField<5>, word_count: BitField<5>) {
+        let data = CommandWordData::DataTransfer {
+            subaddress,
+            word_count,
+        };
+        self.raw_value = data.set_in(self.raw_value)
+    }
+}
+
+impl From<u16> for CommandWord {
+    fn from(value: u16) -> Self {
+        CommandWord::from_u16(value)
+    }
+}
+
+
+/*
+// Status Words.
+*/
+
+#[derive(Debug, Clone)]
+pub struct StatusWord {
+    rt_addr: RTAddr,       // Remote Terminal address 5 bit field.
+    mesg_err: BitField<1>, // Message Error bit.
+    inst: BitField<1>,     // Instrumentation bit.
+    svc_req: BitField<1>,  // Service request bit.
+    bc_comm: BitField<1>,  // Broadcast Command bit.
+    busy: BitField<1>,     // Busy bit.
+    subsys: BitField<1>,   // Subsystem Flag bit.
+    dbc: BitField<1>,      // Dynamic Bus Control bit.
+    term: BitField<1>,     // Terminal Flag bit.
+}
+
+
+/*
+// Data Words.
+*/
+
+#[derive(Debug, Clone)]
+struct DataWord {
+    data: u16, // Data 16 bit field.
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -328,7 +343,6 @@ mod tests {
     fn command_mode_word() {
         let mut cmd = CommandWord::new_mode_command(
             RTAddr::Single(23.into()),
-            RTAction::Transmit,
             ModeCode::TransmitLastCommand,
         );
         assert_eq!(cmd.value(), 0b1011111111110010);
@@ -341,8 +355,6 @@ mod tests {
 
         cmd.set_rt_addr(RTAddr::Single(11.into()));
         assert_eq!(cmd.get_rt_addr(), RTAddr::Single(11.into()));
-        cmd.set_tr_bit(RTAction::Receive);
-        assert_eq!(cmd.get_tr_bit(), RTAction::Receive);
         cmd.set_command_mode(ModeCode::ResetRT);
         assert_eq!(
             cmd.get_command_data(),
@@ -354,7 +366,6 @@ mod tests {
     fn command_mode_to_data_transfer() {
         let mut word = CommandWord::new_mode_command(
             RTAddr::Single(23.into()),
-            RTAction::Transmit,
             ModeCode::TransmitLastCommand,
         );
         word.set_data_transfer(12.into(), 1.into());
@@ -388,6 +399,12 @@ mod tests {
     }
     #[test]
     fn command_code_proper_tr_bit() {
-        todo!();
+        let mut cmd = CommandWord::new_mode_command(
+            RTAddr::Single(23.into()),
+            ModeCode::TransmitLastCommand,
+        );
+
+        cmd.set_command_mode(ModeCode::SynchronizeWithDataWord);
+        assert_eq!(cmd.get_tr_bit(), RTAction::Receive);
     }
 }
