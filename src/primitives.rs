@@ -12,7 +12,7 @@ pub trait Encode {
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct BitField<const SIZE: u8> {
-    pub value: u8,
+    raw_value: u8,
 }
 
 impl<const SIZE: u8> BitField<SIZE> {
@@ -21,9 +21,59 @@ impl<const SIZE: u8> BitField<SIZE> {
             panic!("SIZE is too large for u8.");
         }
         assert!(value < (1 << SIZE), "Value exceeds the bitfield size");
-        Self { value }
+        Self { raw_value: value }
+    }
+
+    pub fn value(&self) -> u8 {
+        self.raw_value
     }
 }
+
+macro_rules! impl_from_for_bitfield {
+  ($($size:expr),*) => {
+      $(
+          impl From<u8> for BitField<$size> {
+              fn from(value: u8) -> Self {
+                  BitField::new(value)
+              }
+          }
+
+          impl From<BitField<$size>> for u8 {
+              fn from(bitfield: BitField<$size>) -> Self {
+                  bitfield.raw_value
+              }
+          }
+
+          impl From<BitField<$size>> for u16 {
+              fn from(bitfield: BitField<$size>) -> Self {
+                  bitfield.raw_value as u16
+              }
+          }
+      )*
+  };
+}
+
+macro_rules! impl_from_for_complex_bitfield {
+  ($($size:expr),*) => {
+      $(
+          impl From<u16> for ComplexBitField<$size> {
+              fn from(value: u16) -> Self {
+                  ComplexBitField::new(value)
+              }
+          }
+
+          impl From<ComplexBitField<$size>> for u16 {
+              fn from(bitfield: ComplexBitField<$size>) -> Self {
+                  bitfield.raw_value
+              }
+          }
+      )*
+  };
+}
+
+// Implement From<u8> for all possible BitField lengths.
+impl_from_for_bitfield!(1, 2, 3, 4, 5, 6, 7, 8);
+impl_from_for_complex_bitfield!(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16);
 
 // FIELD_SIZE in bits. LSB_IDX the position of the LSB of the BitField, which
 // translates to the amount of bits to shift left.
@@ -35,12 +85,12 @@ where
     // Align self to its desired bit position by shifting left.
     fn align_to_word(&self) -> Word {
         let bit_field: BitField<FIELD_SIZE> = (self.clone()).into();
-        (bit_field.value as Word) << LSB_IDX
+        (bit_field.raw_value as Word) << LSB_IDX
     }
 
     // Set position of self in the value word, without changing any other bits.
-    fn set(&self, value: Word) -> Word {
-        let shift_left = WORD_SIZE - FIELD_SIZE + LSB_IDX;
+    fn set_in(&self, value: Word) -> Word {
+        let shift_left = WORD_SIZE - (FIELD_SIZE + LSB_IDX);
         let mask = 0xFFFF >> LSB_IDX << LSB_IDX << shift_left >> shift_left;
         let result = value & !mask;
         result | self.align_to_word()
@@ -58,7 +108,7 @@ where
 // resulting in more than 8 bits when added.
 #[derive(Debug, Copy, Clone)]
 pub struct ComplexBitField<const SIZE: u8> {
-    pub value: Word,
+    raw_value: Word,
 }
 
 impl<const SIZE: u8> ComplexBitField<SIZE> {
@@ -67,24 +117,28 @@ impl<const SIZE: u8> ComplexBitField<SIZE> {
             panic!("SIZE is too large for u16.");
         }
         assert!(value < (1 << SIZE), "Value exceeds the bitfield size");
-        Self { value }
+        Self { raw_value: value }
+    }
+
+    pub fn value(&self) -> Word {
+        self.raw_value
     }
 }
 
 // FIELD_SIZE in bits. LSB_IDX the position of the LSB of the BitField, which
 // translates to the amount of bits to shift left.
 pub trait AlignableComplexBitField<const FIELD_SIZE: u8, const LSB_IDX: u8>:
-    Into<ComplexBitField<FIELD_SIZE>> + From<ComplexBitField<FIELD_SIZE>> 
+    Into<ComplexBitField<FIELD_SIZE>> + From<ComplexBitField<FIELD_SIZE>>
 where
     Self: Clone,
 {
     fn align_to_word(&self) -> Word {
         let bit_field: ComplexBitField<FIELD_SIZE> = (self.clone()).into();
-        bit_field.value << LSB_IDX
+        bit_field.raw_value << LSB_IDX
     }
 
     // Set position of self in the value word, without changing any other bits.
-    fn set(&self, value: Word) -> Word {
+    fn set_in(&self, value: Word) -> Word {
         let shft_left_amount = WORD_SIZE - FIELD_SIZE + LSB_IDX;
         let mask = 0xFFFF >> LSB_IDX << LSB_IDX << shft_left_amount >> shft_left_amount;
         let result = value & !mask;
@@ -97,5 +151,4 @@ where
         let bitfield = ComplexBitField::new(result);
         bitfield.into()
     }
-
 }

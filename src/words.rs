@@ -29,10 +29,10 @@ impl From<RTAddr> for BitField<5> {
 
 impl From<BitField<5>> for RTAddr {
     fn from(bitfield: BitField<5>) -> Self {
-        if bitfield.value == BROADCAST_ADDR {
+        if BROADCAST_ADDR == bitfield.into() {
             RTAddr::Broadcast
         } else {
-            RTAddr::Single(bitfield.value)
+            RTAddr::Single(bitfield.into())
         }
     }
 }
@@ -62,14 +62,13 @@ impl From<RTAction> for BitField<1> {
 
 impl From<BitField<1>> for RTAction {
     fn from(bitfield: BitField<1>) -> Self {
-        if bitfield.value == 0b1 {
+        if 1u8 == bitfield.into() {
             RTAction::Transmit
         } else {
             RTAction::Receive
         }
     }
 }
-
 
 impl AlignableBitField<1, 10> for RTAction {}
 
@@ -93,14 +92,14 @@ impl From<CommandWordData> for ComplexBitField<10> {
                 subaddress,
                 word_count,
             } => {
-                let subaddr = (BitField::<5>::from(subaddress).value as u16) << 5;
-                let wc = BitField::<5>::from(word_count).value as u16;
-                ComplexBitField::new(subaddr + wc)
+                let subaddress: u16 = subaddress.into();
+                let word_count: u16 = word_count.into();
+                ((subaddress << 5) + word_count).into()
             }
             CommandWordData::ModeCode(mode_code) => {
                 let subaddr = (SUBADDRESS_MODE_CODE_1 as u16) << 5;
                 let code = u8::from(mode_code) as u16;
-                ComplexBitField::new(subaddr + code)
+                (subaddr + code).into()
             }
         }
     }
@@ -108,19 +107,18 @@ impl From<CommandWordData> for ComplexBitField<10> {
 
 impl From<ComplexBitField<10>> for CommandWordData {
     fn from(bitfield: ComplexBitField<10>) -> Self {
-        let subaddr = (bitfield.value >> 5) as u8; 
-        let wdc = (bitfield.value & 0b11111) as u8;
+        let subaddr = (bitfield.value() >> 5) as u8;
+        let wdc = (bitfield.value() & 0b11111) as u8;
         if subaddr == SUBADDRESS_MODE_CODE_0 || subaddr == SUBADDRESS_MODE_CODE_1 {
             CommandWordData::ModeCode(ModeCode::from(wdc))
         } else {
-            CommandWordData::DataTransfer { 
-                subaddress: BitField::new(subaddr),
-                word_count: BitField::new(wdc)
+            CommandWordData::DataTransfer {
+                subaddress: subaddr.into(),
+                word_count: wdc.into(),
             }
         }
     }
 }
-
 
 impl AlignableComplexBitField<10, 0> for CommandWordData {}
 
@@ -149,28 +147,50 @@ impl CommandWord {
     pub fn new_data_transfer(
         rt_addr: RTAddr,
         tr: RTAction,
-        subaddress: u8,
-        word_count: u8,
+        subaddress: BitField<5>,
+        word_count: BitField<5>,
     ) -> Self {
         let mut raw_value = rt_addr.align_to_word();
         raw_value += tr.align_to_word();
         raw_value += CommandWordData::DataTransfer {
-            subaddress: BitField::new(subaddress),
-            word_count: BitField::new(word_count),
+            subaddress,
+            word_count,
         }
         .align_to_word();
         Self { raw_value }
     }
 
     pub fn get_rt_addr(&self) -> RTAddr {
-        return RTAddr::read(self.raw_value)
+        return RTAddr::read(self.raw_value);
+    }
+
+    pub fn set_rt_addr(&mut self, addr: RTAddr) {
+        self.raw_value = addr.set_in(self.raw_value)
     }
 
     pub fn get_tr_bit(&self) -> RTAction {
-        return RTAction::read(self.raw_value)
+        return RTAction::read(self.raw_value);
     }
+
+    pub fn set_tr_bit(&mut self, addr: RTAction) {
+        self.raw_value = addr.set_in(self.raw_value)
+    }
+
     pub fn get_command_data(&self) -> CommandWordData {
-        return CommandWordData::read(self.raw_value)
+        return CommandWordData::read(self.raw_value);
+    }
+
+    pub fn set_command_mode(&mut self, code: ModeCode) {
+        let data = CommandWordData::ModeCode(code);
+        self.raw_value = data.set_in(self.raw_value)
+    }
+
+    pub fn set_data_transfer(&mut self, subaddress: BitField<5>, word_count: BitField<5>) {
+        let data = CommandWordData::DataTransfer {
+            subaddress,
+            word_count,
+        };
+        self.raw_value = data.set_in(self.raw_value)
     }
 }
 
@@ -219,7 +239,7 @@ pub enum ModeCode {
     TransmitBITWord,
     SelectedTransmitter,
     OverrideSelectedTransmitter,
-    Invalid // out of bounds OR a Reserved value
+    Invalid, // out of bounds OR a Reserved value
 }
 
 impl From<ModeCode> for u8 {
@@ -263,7 +283,7 @@ impl From<u8> for ModeCode {
             0b10011 => ModeCode::TransmitBITWord,
             0b10100 => ModeCode::SelectedTransmitter,
             0b10101 => ModeCode::OverrideSelectedTransmitter,
-            9_u8..=15_u8 | 22_u8..=u8::MAX => ModeCode::Invalid,   
+            9_u8..=15_u8 | 22_u8..=u8::MAX => ModeCode::Invalid,
         }
     }
 }
@@ -281,8 +301,7 @@ mod tests {
     use crate::words::*;
     #[test]
     fn command_mode_word() {
-
-        let cmd = CommandWord::new_mode_command(
+        let mut cmd = CommandWord::new_mode_command(
             RTAddr::Single(23),
             RTAction::Transmit,
             ModeCode::TransmitLastCommand,
@@ -290,15 +309,56 @@ mod tests {
         assert_eq!(cmd.encode(), 0b1011111111110010);
         assert_eq!(cmd.get_rt_addr(), RTAddr::Single(23));
         assert_eq!(cmd.get_tr_bit(), RTAction::Transmit);
-        assert_eq!(cmd.get_command_data(), CommandWordData::ModeCode(ModeCode::TransmitLastCommand));
+        assert_eq!(
+            cmd.get_command_data(),
+            CommandWordData::ModeCode(ModeCode::TransmitLastCommand)
+        );
+
+        cmd.set_rt_addr(RTAddr::Single(11));
+        assert_eq!(cmd.get_rt_addr(), RTAddr::Single(11));
+        cmd.set_tr_bit(RTAction::Receive);
+        assert_eq!(cmd.get_tr_bit(), RTAction::Receive);
+        cmd.set_command_mode(ModeCode::ResetRT);
+        assert_eq!(
+            cmd.get_command_data(),
+            CommandWordData::ModeCode(ModeCode::ResetRT)
+        );
+    }
+
+    #[test]
+    fn command_mode_to_data_transfer() {
+        let mut word = CommandWord::new_mode_command(
+            RTAddr::Single(23),
+            RTAction::Transmit,
+            ModeCode::TransmitLastCommand,
+        );
+        word.set_data_transfer(12.into(), 1.into());
+        assert_eq!(
+            word.get_command_data(),
+            CommandWordData::DataTransfer {
+                subaddress: 12.into(),
+                word_count: 1.into()
+            }
+        );
     }
 
     #[test]
     fn command_data_transfer_word() {
-        let dt = CommandWord::new_data_transfer(RTAddr::Single(27), RTAction::Receive, 1, 2);
+        let dt = CommandWord::new_data_transfer(
+            RTAddr::Single(27),
+            RTAction::Receive,
+            1.into(),
+            2.into(),
+        );
         assert_eq!(dt.encode(), 0b1101100000100010);
         assert_eq!(dt.get_rt_addr(), RTAddr::Single(27));
         assert_eq!(dt.get_tr_bit(), RTAction::Receive);
-        assert_eq!(dt.get_command_data(), CommandWordData::DataTransfer{subaddress: BitField::new(1), word_count: BitField::new(2)});
+        assert_eq!(
+            dt.get_command_data(),
+            CommandWordData::DataTransfer {
+                subaddress: 1.into(),
+                word_count: 2.into()
+            }
+        );
     }
 }
