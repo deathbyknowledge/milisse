@@ -13,7 +13,7 @@ pub enum WordFormat {
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum RTAddr {
-    Single(u8),
+    Single(BitField<5>),
     Broadcast,
 }
 
@@ -21,7 +21,7 @@ pub enum RTAddr {
 impl From<RTAddr> for BitField<5> {
     fn from(addr: RTAddr) -> Self {
         match addr {
-            RTAddr::Single(val) => Self::new(val),
+            RTAddr::Single(val) => val,
             RTAddr::Broadcast => Self::new(BROADCAST_ADDR),
         }
     }
@@ -302,20 +302,20 @@ mod tests {
     #[test]
     fn command_mode_word() {
         let mut cmd = CommandWord::new_mode_command(
-            RTAddr::Single(23),
+            RTAddr::Single(23.into()),
             RTAction::Transmit,
             ModeCode::TransmitLastCommand,
         );
         assert_eq!(cmd.encode(), 0b1011111111110010);
-        assert_eq!(cmd.get_rt_addr(), RTAddr::Single(23));
+        assert_eq!(cmd.get_rt_addr(), RTAddr::Single(23.into()));
         assert_eq!(cmd.get_tr_bit(), RTAction::Transmit);
         assert_eq!(
             cmd.get_command_data(),
             CommandWordData::ModeCode(ModeCode::TransmitLastCommand)
         );
 
-        cmd.set_rt_addr(RTAddr::Single(11));
-        assert_eq!(cmd.get_rt_addr(), RTAddr::Single(11));
+        cmd.set_rt_addr(RTAddr::Single(11.into()));
+        assert_eq!(cmd.get_rt_addr(), RTAddr::Single(11.into()));
         cmd.set_tr_bit(RTAction::Receive);
         assert_eq!(cmd.get_tr_bit(), RTAction::Receive);
         cmd.set_command_mode(ModeCode::ResetRT);
@@ -328,7 +328,7 @@ mod tests {
     #[test]
     fn command_mode_to_data_transfer() {
         let mut word = CommandWord::new_mode_command(
-            RTAddr::Single(23),
+            RTAddr::Single(23.into()),
             RTAction::Transmit,
             ModeCode::TransmitLastCommand,
         );
@@ -345,13 +345,13 @@ mod tests {
     #[test]
     fn command_data_transfer_word() {
         let dt = CommandWord::new_data_transfer(
-            RTAddr::Single(27),
+            RTAddr::Single(27.into()),
             RTAction::Receive,
             1.into(),
             2.into(),
         );
         assert_eq!(dt.encode(), 0b1101100000100010);
-        assert_eq!(dt.get_rt_addr(), RTAddr::Single(27));
+        assert_eq!(dt.get_rt_addr(), RTAddr::Single(27.into()));
         assert_eq!(dt.get_tr_bit(), RTAction::Receive);
         assert_eq!(
             dt.get_command_data(),
