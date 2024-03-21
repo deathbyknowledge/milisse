@@ -221,7 +221,7 @@ pub struct CommandWord {
 }
 
 impl CommandWord {
-    /// Initialize a new CommandWord as Mode Command. T/R bit is set 
+    /// Initialize a new CommandWord as Mode Command. T/R bit is set
     /// by the ModeCode selected.
     pub fn new_mode_command(rt_addr: RTAddr, code: ModeCode) -> Self {
         let mut raw_value = rt_addr.align_to_word();
@@ -273,7 +273,7 @@ impl CommandWord {
     /// the provided T/R bit is ignored since the value is based on
     /// the Code value.
     pub fn set_tr_bit(&mut self, addr: RTAction) {
-        if let CommandWordData::DataTransfer{..} = self.get_command_data() {
+        if let CommandWordData::DataTransfer { .. } = self.get_command_data() {
             self.raw_value = addr.set_in(self.raw_value);
         }
     }
@@ -307,24 +307,207 @@ impl From<u16> for CommandWord {
     }
 }
 
-
 /*
 // Status Words.
 */
 
+// All status Flags
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MessageError(bool);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Instrumentation(bool);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ServiceRequest(bool);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BroadcastCommand(bool);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Busy(bool);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Subsystem(bool);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DynamicBusControl(bool);
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TerminalFlag(bool);
+
+// Allows to easily create Flag types as `struct MyFlag(bool)`
+macro_rules! impl_flag_traits {
+  ($($t:ty),*) => {
+      $(
+          impl From<$t> for BitField<1> {
+              fn from(new_val: $t) -> Self {
+                  new_val.0.into()
+              }
+          }
+
+          impl From<BitField<1>> for $t {
+              fn from(bitfield: BitField<1>) -> Self {
+                  Self(bitfield.into())
+              }
+          }
+
+          impl From<$t> for bool {
+              fn from(new_val: $t) -> Self {
+                  new_val.0
+              }
+          }
+
+          impl From<bool> for $t {
+              fn from(bitfield: bool) -> Self {
+                  Self(bitfield)
+              }
+          }
+      )*
+  };
+}
+impl_flag_traits!(
+    MessageError,
+    Instrumentation,
+    ServiceRequest,
+    BroadcastCommand,
+    Busy,
+    Subsystem,
+    DynamicBusControl,
+    TerminalFlag
+);
+
+impl AlignableBitField<1, 10> for MessageError {}
+impl AlignableBitField<1, 9> for Instrumentation {}
+impl AlignableBitField<1, 8> for ServiceRequest {}
+impl AlignableBitField<1, 4> for BroadcastCommand {}
+impl AlignableBitField<1, 3> for Busy {}
+impl AlignableBitField<1, 2> for Subsystem {}
+impl AlignableBitField<1, 1> for DynamicBusControl {}
+impl AlignableBitField<1, 0> for TerminalFlag {}
+
+/** Status Word structure (16 bits)
+ *  Bits [15:11]: Remote Terminal (RT) Address.
+ *  Bits [11:10]: Message Error bit.
+ *  Bits [10:9]: Instrumentation bit.
+ *  Bits [9:8]: Service request bit.
+ *  Bits [8:5]: Reserved.
+ *  Bits [5:4]: Broadcast Command bit.
+ *  Bits [4:3]: Busy bit.
+ *  Bits [3:2]: Subsystem bit.
+ *  Bits [2:1]: Dynamic Bus Control bit.
+ *  Bits [1:0]: Terminal flag bit.
+**/
 #[derive(Debug, Clone)]
 pub struct StatusWord {
-    rt_addr: RTAddr,       // Remote Terminal address 5 bit field.
-    mesg_err: BitField<1>, // Message Error bit.
-    inst: BitField<1>,     // Instrumentation bit.
-    svc_req: BitField<1>,  // Service request bit.
-    bc_comm: BitField<1>,  // Broadcast Command bit.
-    busy: BitField<1>,     // Busy bit.
-    subsys: BitField<1>,   // Subsystem Flag bit.
-    dbc: BitField<1>,      // Dynamic Bus Control bit.
-    term: BitField<1>,     // Terminal Flag bit.
+    raw_value: u16,
 }
 
+impl StatusWord {
+    pub fn new(
+        addr: RTAddr,
+        msg_err: MessageError,
+        inst: Instrumentation,
+        svc_req: ServiceRequest,
+        bc_cmd: BroadcastCommand,
+        busy: Busy,
+        subsys: Subsystem,
+        dbc: DynamicBusControl,
+        terminal: TerminalFlag,
+    ) -> Self {
+        let value = addr.align_to_word()
+            + msg_err.align_to_word()
+            + inst.align_to_word()
+            + svc_req.align_to_word()
+            + bc_cmd.align_to_word()
+            + busy.align_to_word()
+            + subsys.align_to_word()
+            + dbc.align_to_word()
+            + terminal.align_to_word();
+        Self { raw_value: value }
+    }
+
+    pub fn value(&self) -> u16 {
+        self.raw_value
+    }
+
+    pub fn from_u16(value: u16) -> Self {
+        Self { raw_value: value }
+    }
+
+    pub fn get_rt_addr(&self) -> RTAddr {
+        return RTAddr::read(self.raw_value);
+    }
+
+    pub fn set_rt_addr(&mut self, addr: RTAddr) {
+        self.raw_value = addr.set_in(self.raw_value)
+    }
+
+    pub fn get_message_error(&self) -> MessageError {
+        return MessageError::read(self.raw_value);
+    }
+
+    pub fn set_message_error(&mut self, flag: MessageError) {
+        self.raw_value = flag.set_in(self.raw_value)
+    }
+
+    pub fn get_instrumentation(&self) -> Instrumentation {
+        return Instrumentation::read(self.raw_value);
+    }
+
+    pub fn set_instrumentation(&mut self, flag: Instrumentation) {
+        self.raw_value = flag.set_in(self.raw_value)
+    }
+
+    pub fn get_service_request(&self) -> ServiceRequest {
+        return ServiceRequest::read(self.raw_value);
+    }
+
+    pub fn set_service_request(&mut self, flag: Instrumentation) {
+        self.raw_value = flag.set_in(self.raw_value)
+    }
+
+    pub fn get_broadcast_command(&self) -> BroadcastCommand {
+        return BroadcastCommand::read(self.raw_value);
+    }
+
+    pub fn set_broadcast_command(&mut self, flag: BroadcastCommand) {
+        self.raw_value = flag.set_in(self.raw_value)
+    }
+
+    pub fn get_busy(&self) -> Busy {
+        return Busy::read(self.raw_value);
+    }
+
+    pub fn set_busy(&mut self, flag: Busy) {
+        self.raw_value = flag.set_in(self.raw_value)
+    }
+
+    pub fn get_subsystem(&self) -> Subsystem {
+        return Subsystem::read(self.raw_value);
+    }
+
+    pub fn set_subsystem(&mut self, flag: Subsystem) {
+        self.raw_value = flag.set_in(self.raw_value)
+    }
+
+    pub fn get_dynamic_bus_control(&self) -> DynamicBusControl {
+        return DynamicBusControl::read(self.raw_value);
+    }
+
+    pub fn set_dynamic_bus_control(&mut self, flag: DynamicBusControl) {
+        self.raw_value = flag.set_in(self.raw_value)
+    }
+
+    pub fn get_terminal_flag(&self) -> TerminalFlag {
+        return TerminalFlag::read(self.raw_value);
+    }
+
+    pub fn set_terminal_flag(&mut self, flag: TerminalFlag) {
+        self.raw_value = flag.set_in(self.raw_value)
+    }
+}
 
 /*
 // Data Words.
@@ -341,10 +524,8 @@ mod tests {
     use crate::words::*;
     #[test]
     fn command_mode_word() {
-        let mut cmd = CommandWord::new_mode_command(
-            RTAddr::Single(23.into()),
-            ModeCode::TransmitLastCommand,
-        );
+        let mut cmd =
+            CommandWord::new_mode_command(RTAddr::Single(23.into()), ModeCode::TransmitLastCommand);
         assert_eq!(cmd.value(), 0b1011111111110010);
         assert_eq!(cmd.get_rt_addr(), RTAddr::Single(23.into()));
         assert_eq!(cmd.get_tr_bit(), RTAction::Transmit);
@@ -364,10 +545,8 @@ mod tests {
 
     #[test]
     fn command_mode_to_data_transfer() {
-        let mut word = CommandWord::new_mode_command(
-            RTAddr::Single(23.into()),
-            ModeCode::TransmitLastCommand,
-        );
+        let mut word =
+            CommandWord::new_mode_command(RTAddr::Single(23.into()), ModeCode::TransmitLastCommand);
         word.set_data_transfer(12.into(), 1.into());
         assert_eq!(
             word.get_command_data(),
@@ -399,12 +578,26 @@ mod tests {
     }
     #[test]
     fn command_code_proper_tr_bit() {
-        let mut cmd = CommandWord::new_mode_command(
-            RTAddr::Single(23.into()),
-            ModeCode::TransmitLastCommand,
-        );
+        let mut cmd =
+            CommandWord::new_mode_command(RTAddr::Single(23.into()), ModeCode::TransmitLastCommand);
 
         cmd.set_command_mode(ModeCode::SynchronizeWithDataWord);
         assert_eq!(cmd.get_tr_bit(), RTAction::Receive);
+    }
+
+    #[test]
+    fn status_word_works() {
+        let word = StatusWord::new(
+            RTAddr::Single(21.into()),
+            false.into(),
+            true.into(),
+            false.into(),
+            true.into(),
+            false.into(),
+            true.into(),
+            false.into(),
+            true.into(),
+        );
+        assert_eq!(word.value(), 0b1010101000010101);
     }
 }

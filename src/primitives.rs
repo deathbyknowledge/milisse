@@ -70,6 +70,18 @@ macro_rules! impl_from_for_complex_bitfield {
 impl_from_for_bitfield!(1, 2, 3, 4, 5, 6, 7, 8);
 impl_from_for_complex_bitfield!(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16);
 
+impl From<bool> for BitField<1> {
+    fn from(value: bool) -> Self {
+        BitField::new(value as u8)
+    }
+}
+
+impl From<BitField<1>> for bool {
+    fn from(bitfield: BitField<1>) -> Self {
+        bitfield.into()
+    }
+}
+
 // FIELD_SIZE in bits. LSB_IDX the position of the LSB of the BitField, which
 // translates to the amount of bits to shift left.
 pub trait AlignableBitField<const FIELD_SIZE: u8, const LSB_IDX: u8>:
