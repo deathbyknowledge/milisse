@@ -4,11 +4,11 @@ const SUBADDRESS_MODE_CODE_0: u8 = 0b00000; // Subaddress for mode code
 const SUBADDRESS_MODE_CODE_1: u8 = 0b11111; // Subaddress for mode code
 const BROADCAST_ADDR: u8 = 0b11111; // Address for Brodcast mode.
 
-#[derive(Debug, Copy, Clone)]
-pub enum WordFormat {
-    CommandWord,
-    DataWord,
-    StatusWord,
+#[derive(Debug, Clone)]
+pub enum Word {
+    Command(CommandWord),
+    Data(u16),
+    Status(StatusWord),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -155,6 +155,30 @@ impl ModeCode {
             0b10110..=u8::MAX => unimplemented!(), // RESERVED values.
         }
     }
+
+    // Some Mode Codes don't allow for the RT Address
+    // to be broadcast, so an extra validation check is
+    // required.
+    fn broadcast_allowed(&self) -> bool {
+        match self {
+            ModeCode::DynamicBusControl => false,
+            ModeCode::Synchronize => true,
+            ModeCode::TransmitStatusWord => false,
+            ModeCode::InitiateSelfTest => true,
+            ModeCode::TransmitterShutdown => true,
+            ModeCode::OverrideTransmitter => true,
+            ModeCode::InhibitTerminalFlagBit => true,
+            ModeCode::OverrideInhibitTerminalFlagBit => true,
+            ModeCode::ResetRT => true,
+            ModeCode::TransmitVectorWord => false,
+            ModeCode::SynchronizeWithDataWord => true,
+            ModeCode::TransmitLastCommand => false,
+            ModeCode::TransmitBITWord => false,
+            ModeCode::SelectedTransmitter => true,
+            ModeCode::OverrideSelectedTransmitter => true,
+            ModeCode::Invalid => false,
+        }
+    }
 }
 
 impl From<ModeCode> for u8 {
@@ -217,7 +241,7 @@ impl From<ModeCode> for BitField<5> {
 **/
 #[derive(Debug, Clone, Copy)]
 pub struct CommandWord {
-    raw_value: Word,
+    raw_value: u16,
 }
 
 impl CommandWord {
@@ -231,12 +255,12 @@ impl CommandWord {
     }
 
     /// Initialize a CommandWord from a u16.
-    pub fn from_u16(value: Word) -> Self {
+    pub fn from_u16(value: u16) -> Self {
         Self { raw_value: value }
     }
 
     /// Return the CommandWord as a u16 (without sync waves and parity bit).
-    pub fn value(&self) -> Word {
+    pub fn value(&self) -> u16 {
         self.raw_value
     }
 
@@ -286,9 +310,16 @@ impl CommandWord {
     /// and Word Data Count field to the provided code. It also
     /// sets the T/R bit for those codes that required a fixed 1.
     pub fn set_command_mode(&mut self, code: ModeCode) {
-        // Depending on the mode code, the T/R bit must be
-        // set to a fixed 1.
-        self.raw_value = code.tr_bit().set_in(self.raw_value);
+        // The Mode Code dictates the T/R bit value, so it must
+        // be updated it.
+        self.set_tr_bit(code.tr_bit());
+
+        // TODO: revisit this.
+        // If the Mode Code does not allow a Broadcast address, validate
+        // it's not being used. If it is, reset to 0b1 for now.
+        if !code.broadcast_allowed() && (self.get_rt_addr() == RTAddr::Broadcast) {
+            self.set_rt_addr(RTAddr::Single(1.into()));
+        }
         self.raw_value = CommandWordData::ModeCode(code).set_in(self.raw_value);
     }
 
@@ -514,8 +545,22 @@ impl StatusWord {
 */
 
 #[derive(Debug, Clone)]
-struct DataWord {
-    data: u16, // Data 16 bit field.
+pub struct DataWord {
+    raw_value: u16, // Data 16 bit field.
+}
+
+impl DataWord {
+    pub fn from_u16(value: u16) -> Self {
+        Self { raw_value: value }
+    }
+
+    pub fn value(&self) -> u16 {
+        self.raw_value
+    }
+
+    pub fn set_value(&mut self, value: u16) {
+        self.raw_value = value
+    }
 }
 
 #[cfg(test)]
