@@ -2,12 +2,12 @@ use crate::primitives::*;
 
 const SUBADDRESS_MODE_CODE_0: u8 = 0b00000; // Subaddress for mode code
 const SUBADDRESS_MODE_CODE_1: u8 = 0b11111; // Subaddress for mode code
-const BROADCAST_ADDR: u8 = 0b11111; // Address for Brodcast mode.
+pub const BROADCAST_ADDR: u8 = 0b11111; // Address for Brodcast mode.
 
 #[derive(Debug, Clone)]
 pub enum Word {
     Command(CommandWord),
-    Data(u16),
+    Data(DataWord),
     Status(StatusWord),
 }
 
@@ -143,40 +143,92 @@ pub enum ModeCode {
     Invalid, // out of bounds OR a Reserved value
 }
 
+/// Each Mode Code has different requirements for the T/R bit,
+/// if there's an associated data word and if a Broadcast address is allowed.
+pub struct ModeCodeOptions {
+    pub tr: RTAction,
+    pub requires_data_word: bool,
+    pub broadcast_allowed: bool,
+}
 impl ModeCode {
-    fn tr_bit(&self) -> RTAction {
-        // Each mode code requires a different T/R bit setting,
-        // this is a quick mapping to get the desired value.
-        match Into::<u8>::into(*self) {
-            0..=0b10000 => RTAction::Transmit,
-            0b10001 => RTAction::Receive,
-            0b10010..=0b10011 => RTAction::Transmit,
-            0b10100..=0b10101 => RTAction::Receive,
-            0b10110..=u8::MAX => unimplemented!(), // RESERVED values.
-        }
-    }
-
-    // Some Mode Codes don't allow for the RT Address
-    // to be broadcast, so an extra validation check is
-    // required.
-    fn broadcast_allowed(&self) -> bool {
-        match self {
-            ModeCode::DynamicBusControl => false,
-            ModeCode::Synchronize => true,
-            ModeCode::TransmitStatusWord => false,
-            ModeCode::InitiateSelfTest => true,
-            ModeCode::TransmitterShutdown => true,
-            ModeCode::OverrideTransmitter => true,
-            ModeCode::InhibitTerminalFlagBit => true,
-            ModeCode::OverrideInhibitTerminalFlagBit => true,
-            ModeCode::ResetRT => true,
-            ModeCode::TransmitVectorWord => false,
-            ModeCode::SynchronizeWithDataWord => true,
-            ModeCode::TransmitLastCommand => false,
-            ModeCode::TransmitBITWord => false,
-            ModeCode::SelectedTransmitter => true,
-            ModeCode::OverrideSelectedTransmitter => true,
-            ModeCode::Invalid => false,
+    pub fn associated_options(&self) -> ModeCodeOptions {
+        match *self {
+            ModeCode::DynamicBusControl => ModeCodeOptions {
+                tr: RTAction::Transmit,
+                requires_data_word: false,
+                broadcast_allowed: false,
+            },
+            ModeCode::Synchronize => ModeCodeOptions {
+                tr: RTAction::Transmit,
+                requires_data_word: false,
+                broadcast_allowed: true,
+            },
+            ModeCode::TransmitStatusWord => ModeCodeOptions {
+                tr: RTAction::Transmit,
+                requires_data_word: false,
+                broadcast_allowed: false,
+            },
+            ModeCode::InitiateSelfTest => ModeCodeOptions {
+                tr: RTAction::Transmit,
+                requires_data_word: false,
+                broadcast_allowed: true,
+            },
+            ModeCode::TransmitterShutdown => ModeCodeOptions {
+                tr: RTAction::Transmit,
+                requires_data_word: false,
+                broadcast_allowed: true,
+            },
+            ModeCode::OverrideTransmitter => ModeCodeOptions {
+                tr: RTAction::Transmit,
+                requires_data_word: false,
+                broadcast_allowed: true,
+            },
+            ModeCode::InhibitTerminalFlagBit => ModeCodeOptions {
+                tr: RTAction::Transmit,
+                requires_data_word: false,
+                broadcast_allowed: true,
+            },
+            ModeCode::OverrideInhibitTerminalFlagBit => ModeCodeOptions {
+                tr: RTAction::Transmit,
+                requires_data_word: false,
+                broadcast_allowed: true,
+            },
+            ModeCode::ResetRT => ModeCodeOptions {
+                tr: RTAction::Transmit,
+                requires_data_word: false,
+                broadcast_allowed: true,
+            },
+            ModeCode::TransmitVectorWord => ModeCodeOptions {
+                tr: RTAction::Transmit,
+                requires_data_word: true,
+                broadcast_allowed: false,
+            },
+            ModeCode::SynchronizeWithDataWord => ModeCodeOptions {
+                tr: RTAction::Receive,
+                requires_data_word: true,
+                broadcast_allowed: true,
+            },
+            ModeCode::TransmitLastCommand => ModeCodeOptions {
+                tr: RTAction::Transmit,
+                requires_data_word: true,
+                broadcast_allowed: false,
+            },
+            ModeCode::TransmitBITWord => ModeCodeOptions {
+                tr: RTAction::Transmit,
+                requires_data_word: true,
+                broadcast_allowed: false,
+            },
+            ModeCode::SelectedTransmitter => ModeCodeOptions {
+                tr: RTAction::Receive,
+                requires_data_word: true,
+                broadcast_allowed: true,
+            },
+            ModeCode::OverrideSelectedTransmitter => ModeCodeOptions {
+                tr: RTAction::Receive,
+                requires_data_word: true,
+                broadcast_allowed: true,
+            },
+            ModeCode::Invalid => unreachable!(),
         }
     }
 }
@@ -249,7 +301,7 @@ impl CommandWord {
     /// by the ModeCode selected.
     pub fn new_mode_command(rt_addr: RTAddr, code: ModeCode) -> Self {
         let mut raw_value = rt_addr.align_to_word();
-        raw_value += code.tr_bit().align_to_word();
+        raw_value += code.associated_options().tr.align_to_word();
         raw_value += CommandWordData::ModeCode(code).align_to_word();
         Self { raw_value }
     }
@@ -310,14 +362,16 @@ impl CommandWord {
     /// and Word Data Count field to the provided code. It also
     /// sets the T/R bit for those codes that required a fixed 1.
     pub fn set_command_mode(&mut self, code: ModeCode) {
+        let options = code.associated_options();
+
         // The Mode Code dictates the T/R bit value, so it must
-        // be updated it.
-        self.set_tr_bit(code.tr_bit());
+        // be updated it. (Set manually)
+        self.raw_value = options.tr.set_in(self.raw_value);
 
         // TODO: revisit this.
         // If the Mode Code does not allow a Broadcast address, validate
         // it's not being used. If it is, reset to 0b1 for now.
-        if !code.broadcast_allowed() && (self.get_rt_addr() == RTAddr::Broadcast) {
+        if !options.broadcast_allowed && (self.get_rt_addr() == RTAddr::Broadcast) {
             self.set_rt_addr(RTAddr::Single(1.into()));
         }
         self.raw_value = CommandWordData::ModeCode(code).set_in(self.raw_value);
@@ -626,6 +680,7 @@ mod tests {
         let mut cmd =
             CommandWord::new_mode_command(RTAddr::Single(23.into()), ModeCode::TransmitLastCommand);
 
+        assert_eq!(cmd.get_tr_bit(), RTAction::Transmit);
         cmd.set_command_mode(ModeCode::SynchronizeWithDataWord);
         assert_eq!(cmd.get_tr_bit(), RTAction::Receive);
     }
